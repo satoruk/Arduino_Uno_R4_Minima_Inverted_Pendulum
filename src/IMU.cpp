@@ -9,11 +9,28 @@ int IMU::begin(TwoWire& wirePort, bool ad0val, uint8_t ad0pin) {
     return -1;
   }
 
-  filter.begin(100);
+  //    50 Hz = 20 ms = 20,000 μs
+  //   100 Hz = 10 ms = 10,000 μs
+  //   200 Hz =  5 ms =  5,000 μs
+  //   500 Hz =  2 ms =  2,000 μs
+  // 1,000 Hz =  1 ms =  1,000 μs
+  float freq_hz = 200.0;
+  filter.begin(freq_hz);
   return 0;
 }
 
 void IMU::update() {
+  // unsigned long now = micros();
+  // unsigned long dt = (now - prevMicros);
+  // if (dt < 4500ul) {
+  //   return;
+  // }
+  // prevMicros = now;
+  // Serial.print(">IMU update:");
+  // Serial.print(millis());
+  // Serial.print(":");
+  // Serial.println(dt);
+
   if (!_icm.dataReady()) {
     return;
   }
@@ -55,13 +72,6 @@ void IMU::calibrate() {
   _icm.setBiasCPassX((int32_t)((magMin[0] + magMax[0]) / 2 * 65536));
   _icm.setBiasCPassY((int32_t)((magMin[1] + magMax[1]) / 2 * 65536));
   _icm.setBiasCPassZ((int32_t)((magMin[2] + magMax[2]) / 2 * 65536));
-
-  // 50 Hz = 20ms
-  // 100 Hz = 10ms
-  // 1000 Hz = 1ms
-  float freq_hz = 100.0;
-
-  filter.begin(freq_hz);  // Hz
 }
 
 float* IMU::calibrateGyro() {

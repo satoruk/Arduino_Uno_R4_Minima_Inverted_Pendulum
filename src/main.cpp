@@ -15,19 +15,20 @@ const int forwardPin = 10;        // IN1
 const int reversePin = 9;         // IN2
 const float pwmFrequency = 1000;  // PWM 周波数 1kHz
 
-const int pidArraySize = 3;  // 配列の要素数
 float roll = 0;
-float Kp = 700;        // Pゲイン
-float Ki = 50;         // Iゲイン
-float Kd = 75;         // Dゲイン
-float target = 49.0f;  // 目標値。モジュールが横置きなら0前後、縦置きなら90前後
+float Kp = 1900;       // Pゲイン
+float Ki = 1000;       // Iゲイン
+float Kd = 5;          // Dゲイン
+float target = 56.0f;  // 目標値。モジュールが横置きなら0前後、縦置きなら90前後
 
-float dt, preTime;
+unsigned long preTime;
+float dt;
 float P, I, D, U, preP;
 float power = 0;     // モータの出力(PID計算結果)
 float duty = 60.0f;  // pwmデューティ比
 
-int stoptheta = 35;  // 倒れすぎたらモータを止める角度
+float minDuty = 41.0f;
+int stoptheta = 40;  // 倒れすぎたらモータを止める角度
 
 IMU imu;
 volatile bool updateIMUFlag = false;  // 割り込みフラグ
@@ -54,12 +55,12 @@ void log(float now, const char* str, const char* val) {
 
 // シリアルからのゲインを動的に設定する関数
 void processSerialData() {
-  char inputBuffer[20];        // シリアルからの入力を格納するバッファ
-  int currentIndex = 0;        // バッファの現在の位置
-  float values[pidArraySize];  // 分割された値を格納する配列
+  char inputBuffer[20];  // シリアルからの入力を格納するバッファ
+  int currentIndex = 0;  // バッファの現在の位置
+  float values[4];       // 分割された値を格納する配列
 
   // "1,2,3"のような形式で入力されたデータを分割して配列に格納
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     currentIndex = 0;
     while (Serial.available()) {
       char receivedChar = Serial.read();
@@ -86,6 +87,16 @@ void processSerialData() {
   Kp = values[0];
   Ki = values[1];
   Kd = values[2];
+  target = values[3];
+
+  Serial.print("Kp:");
+  Serial.print(Kp);
+  Serial.print(", Ki:");
+  Serial.print(Ki);
+  Serial.print(", Kd:");
+  Serial.print(Kd);
+  Serial.print(", target:");
+  Serial.println(target);
 }
 
 void onTimer(timer_callback_args_t __attribute((unused)) * p_args) {
@@ -108,7 +119,6 @@ void setup() {
   delay(100);
   imu.calibrate();
 
-  float minDuty = 60.0f;
   motorDriver.begin(forwardPin, reversePin, pwmFrequency, minDuty);
   delay(100);
   motorDriver.stop();
@@ -134,26 +144,26 @@ void setup() {
 int count = 0;
 
 void loop() {
-  if (updateIMUFlag) {
-    imu.update();
-    updateIMUFlag = false;
-  }
+  imu.update();
+  // if (updateIMUFlag) {
+  //   updateIMUFlag = false;
+  // }
 
   if (Serial.available() > 0) {
     processSerialData();  // シリアルに入力があったら処理を呼ぶ
   }
 
   // 100ms ごとに姿勢を表示
-  float now = millis();
+  unsigned long now = millis();
   static unsigned long prevTime = 0;
   bool flagDisplay = false;
-  if (now - prevTime >= 100) {
+  if (now - prevTime >= 300) {
     prevTime = now;
     flagDisplay = true;
   }
 
-  if (flagDisplay) {
 #if DEBUG
+  if (flagDisplay) {
     // 姿勢角を計算
     float roll = imu.filter.getRoll();
     float pitch = imu.filter.getPitch();
@@ -163,14 +173,15 @@ void loop() {
     log(now, "roll", roll);
     log(now, "pitch", pitch);
     log(now, "yaw", yaw);
-#endif
   }
+#endif
 
   roll = imu.filter.getRoll();  // 角度取得
 
-  dt = (micros() - preTime) * 0.000001;  // 処理時間を求める
+  unsigned long unow = micros();
+  dt = (unow - preTime) * 0.000001;  // 処理時間を求める
 
-  preTime = micros();  // 処理時間を記録
+  preTime = unow;  // 処理時間を記録
 
   // PID制御
   // 目標角度から現在の角度を引いて偏差を求める
@@ -184,27 +195,34 @@ void loop() {
   if (150 < abs(I * Ki)) I = 0;
 
 #if DEBUG
-  log(now, "KP*P", Kp * P);
-  log(now, "KI*I", Ki * I);
-  log(now, "KD*D", Kd * D);
-  log(now, "P", P);
-  log(now, "I", I);
-  log(now, "D", D);
+  if (flagDisplay) {
+    log(now, "KP*P", Kp * P);
+    log(now, "KI*I", Ki * I);
+    log(now, "KD*D", Kd * D);
+    log(now, "P", P);
+    log(now, "I", I);
+    log(now, "D", D);
+    log(now, "target", target);
+    log(now, "limit p", -stoptheta + target);
+    log(now, "limit n", stoptheta + target);
+    log(now, "dt", dt);
+  }
 #endif
 
   // 角度を検知してモータを動作させる。(倒立振子の主動作)
   // 出力を計算する
   power = (int)(Kp * P + Ki * I + Kd * D);
 
-  duty = map(constrain((int)abs(power), 0, 350), 0, 350, 50, 100);
+  duty = map(constrain((int)abs(power), 0, 350), 0, 350, 40, 100);
   // duty = (int)(constrain((int)abs(power), V_MIN, V_MAX));  //
   // 255に制限　飽和する
 
 #if DEBUG
-  log(now, "power", power);
-  log(now, "duty", duty);
+  if (flagDisplay) {
+    log(now, "power", power);
+    log(now, "duty", duty);
+  }
 #endif
-
   // roll = 49
   // stoptheta =
   // target = 49
@@ -216,18 +234,29 @@ void loop() {
     I = 0;
     D = 0;
 #if DEBUG
-    log(now, "rotate", "stop");
+    if (flagDisplay) {
+      log(now, "rotate", "standby");
+    }
 #endif
   } else {
+    // if (duty < minDuty) {
+    //   // あまりにも小さいと回らないので停止
+    //   motorDriver.stop();
+    //   log(now, "rotate", "stop");
+    // } else if (power < 0) {
     if (power < 0) {
       motorDriver.reverse(duty);
 #if DEBUG
-      log(now, "rotate", "reverse");
+      if (flagDisplay) {
+        log(now, "rotate", "reverse");
+      }
 #endif
     } else if (0 < power) {
       motorDriver.forward(duty);
 #if DEBUG
-      log(now, "rotate", "forward");
+      if (flagDisplay) {
+        log(now, "rotate", "forward");
+      }
 #endif
     }
   }

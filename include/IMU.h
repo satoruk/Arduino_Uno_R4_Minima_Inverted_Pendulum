@@ -30,6 +30,7 @@ class IMU {
 
  private:
   ICM_20948_I2C _icm;
+  unsigned long prevMicros;
 };
 
 #endif
